@@ -1,6 +1,6 @@
 // -*- mode: java; c-basic-offset: 2; -*-
 // Copyright 2009-2011 Google, All Rights reserved
-// Copyright 2011-2012 MIT, All rights reserved
+// Copyright 2011-2017 MIT, All rights reserved
 // Released under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 
@@ -52,6 +52,7 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import com.google.common.collect.Maps;
 import com.google.common.io.CharStreams;
+import java.util.Locale;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -80,12 +81,17 @@ import java.util.logging.Logger;
  */
 public final class YoungAndroidProjectService extends CommonProjectService {
 
-  private static int currentProgress = 0;
   private static final Logger LOG = Logger.getLogger(YoungAndroidProjectService.class.getName());
+  private static final int MB = 1024 * 1024;
 
   // The value of this flag can be changed in appengine-web.xml
   private static final Flag<Boolean> sendGitVersion =
     Flag.createFlag("build.send.git.version", true);
+
+  private static final Flag<Integer> MAX_PROJECT_SIZE =
+      Flag.createFlag("project.maxsize", 30);
+  private static final String ERROR_LARGE_PROJECT =
+      "Sorry, can't package projects larger than %1$d MB. Yours is %2$3.2f MB.";
 
   // Project folder prefixes
   public static final String SRC_FOLDER = YoungAndroidSourceAnalyzer.SRC_FOLDER;
@@ -116,6 +122,9 @@ public final class YoungAndroidProjectService extends CommonProjectService {
   // host[:port] to use for connecting to the build server
   private static final Flag<String> buildServerHost =
       Flag.createFlag("build.server.host", "localhost:9990");
+  // host[:port] to use for connecting to the second build server
+  private static final Flag<String> buildServerHost2 =
+      Flag.createFlag("build2.server.host", "");
   // host[:port] to tell build server app host url
   private static final Flag<String> appengineHost =
       Flag.createFlag("appengine.host", "");
@@ -129,7 +138,8 @@ public final class YoungAndroidProjectService extends CommonProjectService {
    * Returns project settings that can be used when creating a new project.
    */
   public static String getProjectSettings(String icon, String vCode, String vName,
-    String useslocation, String aName, String sizing, String showListsAsJson, String tutorialURL) {
+    String useslocation, String aName, String sizing, String showListsAsJson, String tutorialURL, String subsetJSON,
+    String actionBar, String theme, String primaryColor, String primaryColorDark, String accentColor) {
     icon = Strings.nullToEmpty(icon);
     vCode = Strings.nullToEmpty(vCode);
     vName = Strings.nullToEmpty(vName);
@@ -138,6 +148,12 @@ public final class YoungAndroidProjectService extends CommonProjectService {
     aName = Strings.nullToEmpty(aName);
     showListsAsJson = Strings.nullToEmpty(showListsAsJson);
     tutorialURL = Strings.nullToEmpty(tutorialURL);
+    subsetJSON = Strings.nullToEmpty(subsetJSON);
+    actionBar = Strings.nullToEmpty(actionBar);
+    theme = Strings.nullToEmpty(theme);
+    primaryColor = Strings.nullToEmpty(primaryColor);
+    primaryColorDark = Strings.nullToEmpty(primaryColorDark);
+    accentColor = Strings.nullToEmpty(accentColor);
     return "{\"" + SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS + "\":{" +
         "\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_ICON + "\":\"" + icon +
         "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_VERSION_CODE + "\":\"" + vCode +
@@ -147,6 +163,12 @@ public final class YoungAndroidProjectService extends CommonProjectService {
         "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_SIZING + "\":\"" + sizing +
         "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_SHOW_LISTS_AS_JSON + "\":\"" + showListsAsJson +
         "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_TUTORIAL_URL + "\":\"" + tutorialURL +
+        "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_BLOCK_SUBSET + "\":\"" + subsetJSON +
+        "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_ACTIONBAR + "\":\"" + actionBar +
+        "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_THEME + "\":\"" + theme +
+        "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_PRIMARY_COLOR + "\":\"" + primaryColor +
+        "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_PRIMARY_COLOR_DARK + "\":\"" + primaryColorDark +
+        "\",\"" + SettingsConstants.YOUNG_ANDROID_SETTINGS_ACCENT_COLOR + "\":\"" + accentColor +
         "\"}}";
   }
 
@@ -162,7 +184,8 @@ public final class YoungAndroidProjectService extends CommonProjectService {
    */
   public static String getProjectPropertiesFileContents(String projectName, String qualifiedName,
     String icon, String vcode, String vname, String useslocation, String aname,
-    String sizing, String showListsAsJson, String tutorialURL) {
+    String sizing, String showListsAsJson, String tutorialURL, String subsetJSON, String actionBar, String theme,
+    String primaryColor, String primaryColorDark, String accentColor) {
     String contents = "main=" + qualifiedName + "\n" +
         "name=" + projectName + '\n' +
         "assets=../" + ASSETS_FOLDER + "\n" +
@@ -191,6 +214,24 @@ public final class YoungAndroidProjectService extends CommonProjectService {
     }
     if (tutorialURL != null && !tutorialURL.isEmpty()) {
       contents += "tutorialurl=" + tutorialURL + "\n";
+    }
+    if (subsetJSON != null && !subsetJSON.isEmpty()) {
+      contents += "subsetjson=" + subsetJSON + "\n";
+    }
+    if (actionBar != null && !actionBar.isEmpty()) {
+      contents += "actionbar=" + actionBar + "\n";
+    }
+    if (theme != null && !theme.isEmpty()) {
+      contents += "theme=" + theme + "\n";
+    }
+    if (primaryColor != null && !primaryColor.isEmpty()) {
+      contents += "color.primary=" + primaryColor + "\n";
+    }
+    if (primaryColorDark != null && !primaryColorDark.isEmpty()) {
+      contents += "color.primary.dark=" + primaryColorDark + "\n";
+    }
+    if (accentColor != null && !accentColor.isEmpty()) {
+      contents += "color.accent=" + accentColor + "\n";
     }
     return contents;
   }
@@ -264,9 +305,27 @@ public final class YoungAndroidProjectService extends CommonProjectService {
     String newTutorialURL = Strings.nullToEmpty(settings.getSetting(
         SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
         SettingsConstants.YOUNG_ANDROID_SETTINGS_TUTORIAL_URL));
+    String newSubsetJSON = Strings.nullToEmpty(settings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_BLOCK_SUBSET));
     String newAName = Strings.nullToEmpty(settings.getSetting(
           SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
           SettingsConstants.YOUNG_ANDROID_SETTINGS_APP_NAME));
+    String newActionBar = Strings.nullToEmpty(settings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_ACTIONBAR));
+    String newTheme = Strings.nullToEmpty(settings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_THEME));
+    String newPrimaryColor = Strings.nullToEmpty(settings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_PRIMARY_COLOR));
+    String newPrimaryColorDark = Strings.nullToEmpty(settings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_PRIMARY_COLOR_DARK));
+    String newAccentColor = Strings.nullToEmpty(settings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_ACCENT_COLOR));
 
     // Extract the old icon from the project.properties file from storageIo.
     String projectProperties = storageIo.downloadFile(userId, projectId,
@@ -287,17 +346,26 @@ public final class YoungAndroidProjectService extends CommonProjectService {
     String oldAName = Strings.nullToEmpty(properties.getProperty("aname"));
     String oldShowListsAsJson = Strings.nullToEmpty(properties.getProperty("showlistsasjson"));
     String oldTutorialURL = Strings.nullToEmpty(properties.getProperty("tutorialurl"));
+    String oldSubsetJSON = Strings.nullToEmpty(properties.getProperty("subsetjson"));
+    String oldActionBar = Strings.nullToEmpty(properties.getProperty("actionbar"));
+    String oldTheme = Strings.nullToEmpty(properties.getProperty("theme"));
+    String oldPrimaryColor = Strings.nullToEmpty(properties.getProperty("color.primary"));
+    String oldPrimaryColorDark = Strings.nullToEmpty(properties.getProperty("color.primary.dark"));
+    String oldAccentColor = Strings.nullToEmpty(properties.getProperty("color.accent"));
 
     if (!newIcon.equals(oldIcon) || !newVCode.equals(oldVCode) || !newVName.equals(oldVName)
       || !newUsesLocation.equals(oldUsesLocation) ||
          !newAName.equals(oldAName) || !newSizing.equals(oldSizing) ||
       !newShowListsAsJson.equals(oldShowListsAsJson) ||
-      !newTutorialURL.equals(oldTutorialURL)) {
+        !newTutorialURL.equals(oldTutorialURL) || !newSubsetJSON.equals(oldSubsetJSON) || !newActionBar.equals(oldActionBar) ||
+        !newTheme.equals(oldTheme) || !newPrimaryColor.equals(oldPrimaryColor) ||
+        !newPrimaryColorDark.equals(oldPrimaryColorDark) || !newAccentColor.equals(oldAccentColor)) {
       // Recreate the project.properties and upload it to storageIo.
       String projectName = properties.getProperty("name");
       String qualifiedName = properties.getProperty("main");
       String newContent = getProjectPropertiesFileContents(projectName, qualifiedName, newIcon,
-        newVCode, newVName, newUsesLocation, newAName, newSizing, newShowListsAsJson, newTutorialURL);
+        newVCode, newVName, newUsesLocation, newAName, newSizing, newShowListsAsJson, newTutorialURL, newSubsetJSON,
+        newActionBar, newTheme, newPrimaryColor, newPrimaryColorDark, newAccentColor);
       storageIo.uploadFileForce(projectId, PROJECT_PROPERTIES_FILE_NAME, userId,
           newContent, StorageUtil.DEFAULT_CHARSET);
     }
@@ -316,7 +384,8 @@ public final class YoungAndroidProjectService extends CommonProjectService {
 
     String propertiesFileName = PROJECT_PROPERTIES_FILE_NAME;
     String propertiesFileContents = getProjectPropertiesFileContents(projectName,
-      qualifiedFormName, null, null, null, null, null, null, null, null);
+      qualifiedFormName, null, null, null, null, null, null, null, null, null, null, null, null,
+        null, null);
 
     String formFileName = YoungAndroidFormNode.getFormFileId(qualifiedFormName);
     String formFileContents = getInitialFormPropertiesFileContents(qualifiedFormName);
@@ -336,7 +405,8 @@ public final class YoungAndroidProjectService extends CommonProjectService {
     project.addTextFile(new TextFile(yailFileName, yailFileContents));
 
     // Create new project
-    return storageIo.createProject(userId, project, getProjectSettings("", "1", "1.0", "false", projectName, "Fixed", "false", ""));
+    return storageIo.createProject(userId, project, getProjectSettings("", "1", "1.0", "false",
+        projectName, "Fixed", "false", "", "", "false", "AppTheme.Light.DarkActionBar","0", "0", "0"));
   }
 
   @Override
@@ -369,6 +439,24 @@ public final class YoungAndroidProjectService extends CommonProjectService {
     String tutorialURL = oldSettings.getSetting(
         SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
         SettingsConstants.YOUNG_ANDROID_SETTINGS_TUTORIAL_URL);
+    String subsetJSON = oldSettings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_BLOCK_SUBSET);
+    String actionBar = oldSettings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_ACTIONBAR);
+    String theme = oldSettings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_THEME);
+    String primaryColor = oldSettings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_PRIMARY_COLOR);
+    String primaryColorDark = oldSettings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_PRIMARY_COLOR_DARK);
+    String accentColor = oldSettings.getSetting(
+        SettingsConstants.PROJECT_YOUNG_ANDROID_SETTINGS,
+        SettingsConstants.YOUNG_ANDROID_SETTINGS_ACCENT_COLOR);
 
     Project newProject = new Project(newName);
     newProject.setProjectType(YoungAndroidProjectNode.YOUNG_ANDROID_PROJECT_TYPE);
@@ -388,7 +476,8 @@ public final class YoungAndroidProjectService extends CommonProjectService {
         String qualifiedFormName = StringUtils.getQualifiedFormName(
             storageIo.getUser(userId).getUserEmail(), newName);
         newContents = getProjectPropertiesFileContents(newName, qualifiedFormName, icon, vcode,
-          vname, useslocation, aname, sizing, showListsAsJson, tutorialURL);
+          vname, useslocation, aname, sizing, showListsAsJson, tutorialURL, subsetJSON, actionBar,
+          theme, primaryColor, primaryColorDark, accentColor);
       } else {
         // This is some file other than the project properties file.
         // oldSourceFileName may contain the old project name as a path segment, surrounded by /.
@@ -412,7 +501,8 @@ public final class YoungAndroidProjectService extends CommonProjectService {
 
     // Create the new project and return the new project's id.
     return storageIo.createProject(userId, newProject, getProjectSettings(icon, vcode, vname,
-        useslocation, aname, sizing, showListsAsJson, tutorialURL));
+        useslocation, aname, sizing, showListsAsJson, tutorialURL, subsetJSON, actionBar, theme, primaryColor,
+        primaryColorDark, accentColor));
   }
 
   @Override
@@ -559,6 +649,17 @@ public final class YoungAndroidProjectService extends CommonProjectService {
   }
 
   /**
+   * Constructs a RpcResult object that indicates that a file was too big to send.
+   *
+   * @param size size of the aia
+   * @return a new RpcResult with information for rendering an error in the client
+   */
+  private RpcResult fileTooBigResult(double size) {
+    return new RpcResult(413, "", String.format(Locale.getDefault(),
+        "{\"maxSize\":%d,\"aiaSize\":%f}", MAX_PROJECT_SIZE.get(), size / MB));
+  }
+
+  /**
    * Make a request to the Build Server to build a project.  The Build Server will asynchronously
    * post the results of the build via the {@link com.google.appinventor.server.ReceiveBuildServlet}
    * A later call will need to be made by the client in order to get those results.
@@ -571,7 +672,8 @@ public final class YoungAndroidProjectService extends CommonProjectService {
    * @return an RpcResult reflecting the call to the Build Server
    */
   @Override
-  public RpcResult build(User user, long projectId, String nonce, String target) {
+  public RpcResult build(User user, long projectId, String nonce, String target,
+    boolean secondBuildserver) {
     String userId = user.getUserId();
     String projectName = storageIo.getProjectName(userId, projectId);
     String outputFileDir = BUILD_FOLDER + '/' + target;
@@ -593,6 +695,7 @@ public final class YoungAndroidProjectService extends CommonProjectService {
           user.getUserEmail(),
           userId,
           projectId,
+          secondBuildserver,
           outputFileDir));
       HttpURLConnection connection = (HttpURLConnection) buildServerUrl.openConnection();
       connection.setDoOutput(true);
@@ -603,6 +706,17 @@ public final class YoungAndroidProjectService extends CommonProjectService {
       zipFile = fileExporter.exportProjectSourceZip(userId, projectId, false,
           /* includeAndroidKeystore */ true,
         projectName + ".aia", true, false, true, false);
+      // The code below tests the size of the compressed project before
+      // we send it off to the buildserver. When using URLFetch we know that
+      // this size is limited to 10MB based on Google's documentation.
+      // It isn't clear if this is also enforced in the Java 8 environment
+      // when not using URLFetch. However we are being conservative for now.
+      // Keep in mind that large projects can lead to large APK files which
+      // may not be loadable into many memory restricted devices, so we
+      // may not want to encourage large projects...
+      if (zipFile.getContent().length > MAX_PROJECT_SIZE.get() * MB) {
+        return fileTooBigResult(zipFile.getContent().length);
+      }
       bufferedOutputStream.write(zipFile.getContent());
       bufferedOutputStream.flush();
       bufferedOutputStream.close();
@@ -641,6 +755,16 @@ public final class YoungAndroidProjectService extends CommonProjectService {
         }
 
         return new RpcResult(responseCode, "", StringUtils.escape(error));
+      } else {
+        // We get here if all went well and we sent the job to the
+        // buildserver. Below we read the response, but throw it away.
+        // We don't really care what was said. But we need to empty out
+        // the TCP Stream or App Engine will abort the connection by
+        // sending a RST packet instead of re-using it or closing it
+        // cleanly (by sending a FIN packet). Aborting connections can
+        // have a negative effect on some buildserver infrastructures,
+        // particularly those based on docker swarm (as of 2018).
+        readContent(connection.getInputStream());
       }
     } catch (MalformedURLException e) {
       CrashReport.createAndLogError(LOG, null,
@@ -648,17 +772,12 @@ public final class YoungAndroidProjectService extends CommonProjectService {
       return new RpcResult(false, "", e.getMessage());
     } catch (IOException e) {
       // As of App Engine 1.9.0 we get these when UrlFetch is asked to send too much data
-      Throwable wrappedException = e;
       int zipFileLength = zipFile == null ? -1 : zipFile.getContent().length;
-      if (zipFileLength >= (5 * 1024 * 1024) /* 5 MB */) {
-        String lengthMbs = format((zipFileLength * 1.0)/(1024*1024));
-        wrappedException = new IllegalArgumentException(
-          "Sorry, can't package projects larger than 5MB."
-          + " Yours is " + lengthMbs + "MB.", e);
+      if (zipFileLength >= MAX_PROJECT_SIZE.get() * MB) {
+        return fileTooBigResult(zipFileLength);
+      } else {
+        return new RpcResult(false, "", e.getMessage());
       }
-      CrashReport.createAndLogError(LOG, null,
-          buildErrorMsg("IOException", buildServerUrl, userId, projectId), wrappedException);
-      return new RpcResult(false, "", wrappedException.getMessage());
     } catch (EncryptionException e) {
       CrashReport.createAndLogError(LOG, null,
           buildErrorMsg("EncryptionException", buildServerUrl, userId, projectId), e);
@@ -669,52 +788,53 @@ public final class YoungAndroidProjectService extends CommonProjectService {
       Throwable wrappedException = e;
       if (e instanceof ApiProxy.RequestTooLargeException && zipFile != null) {
         int zipFileLength = zipFile.getContent().length;
-        if (zipFileLength >= (5 * 1024 * 1024) /* 5 MB */) {
-          String lengthMbs = format((zipFileLength * 1.0)/(1024*1024));
-          wrappedException = new IllegalArgumentException(
-              "Sorry, can't package projects larger than 5MB."
-              + " Yours is " + lengthMbs + "MB.", e);
+        if (zipFileLength >= MAX_PROJECT_SIZE.get() * MB) {
+          return fileTooBigResult(zipFileLength);
         } else {
           wrappedException = new IllegalArgumentException(
               "Sorry, project was too large to package (" + zipFileLength + " bytes)");
         }
+      } else {
+        // Unexpected runtime error
+        CrashReport.createAndLogError(LOG, null,
+            buildErrorMsg("RuntimeException", buildServerUrl, userId, projectId), wrappedException);
       }
-      CrashReport.createAndLogError(LOG, null,
-          buildErrorMsg("RuntimeException", buildServerUrl, userId, projectId), wrappedException);
       return new RpcResult(false, "", wrappedException.getMessage());
     }
     return new RpcResult(true, "Building " + projectName, "");
   }
 
-  private String buildErrorMsg(String exceptionName, URL buildURL, String userId, long projectId) {
-    return "Request to build failed with " + exceptionName + ", user=" + userId
-        + ", project=" + projectId + ", build URL is " + buildURL
-        + " [" + buildURL.toString().length() + "]";
+  String buildErrorMsg(String exceptionName, URL buildURL, String userId, long projectId) {
+    return "Request to build failed with " + exceptionName 
+      + ", user=" + userId + ", project=" + projectId 
+      + ", build URL is " + (buildURL != null ? buildURL : "null") + " [" 
+      + (buildURL != null ? buildURL.toString().length() : "n/a") + "]";
   }
 
   // Note that this is a function rather than just a constant because we assume it will get
   // a little more complicated when we want to get the URL from an App Engine config file or
   // command line argument.
   private String getBuildServerUrlStr(String userName, String userId,
-                                      long projectId, String fileName)
+    long projectId, boolean secondBuildserver, String fileName)
       throws UnsupportedEncodingException, EncryptionException {
-    return "http://" + buildServerHost.get() + "/buildserver/build-all-from-zip-async"
-           + "?uname=" + URLEncoder.encode(userName, "UTF-8")
-           + (sendGitVersion.get()
-               ? "&gitBuildVersion="
-                 + URLEncoder.encode(GitBuildId.getVersion(), "UTF-8")
-               : "")
-           + "&callback="
-           + URLEncoder.encode("http://" + getCurrentHost() + ServerLayout.ODE_BASEURL_NOAUTH
-                               + ServerLayout.RECEIVE_BUILD_SERVLET + "/"
-                               + Security.encryptUserAndProjectId(userId, projectId)
-                               + "/" + fileName,
-                               "UTF-8");
+    return "http://" + (secondBuildserver ? buildServerHost2.get() : buildServerHost.get()) +
+      "/buildserver/build-all-from-zip-async"
+      + "?uname=" + URLEncoder.encode(userName, "UTF-8")
+      + (sendGitVersion.get()
+        ? "&gitBuildVersion="
+        + URLEncoder.encode(GitBuildId.getVersion(), "UTF-8")
+        : "")
+      + "&callback="
+      + URLEncoder.encode("http://" + getCurrentHost() + ServerLayout.ODE_BASEURL_NOAUTH
+        + ServerLayout.RECEIVE_BUILD_SERVLET + "/"
+        + Security.encryptUserAndProjectId(userId, projectId)
+        + "/" + fileName,
+        "UTF-8");
   }
 
   private String getCurrentHost() {
     if (Server.isProductionServer()) {
-      if (appengineHost.get()=="") {
+      if (StringUtils.isNullOrEmpty(appengineHost.get())) {
         String applicationVersionId = SystemProperty.applicationVersion.get();
         String applicationId = SystemProperty.applicationId.get();
         return applicationVersionId + "." + applicationId + ".appspot.com";
@@ -760,8 +880,9 @@ public final class YoungAndroidProjectService extends CommonProjectService {
     String userId = user.getUserId();
     String buildOutputFileName = BUILD_FOLDER + '/' + target + '/' + "build.out";
     List<String> outputFiles = storageIo.getProjectOutputFiles(userId, projectId);
-    updateCurrentProgress(user, projectId, target);
-    RpcResult buildResult = new RpcResult(-1, ""+currentProgress, ""); // Build not finished
+    RpcResult buildResult = new RpcResult(-1,
+        Integer.toString(getCurrentProgress(user, projectId, target)),
+        ""); // Build not finished
     for (String outputFile : outputFiles) {
       if (buildOutputFileName.equals(outputFile)) {
         String outputStr = storageIo.downloadFile(userId, projectId, outputFile, "UTF-8");
@@ -787,48 +908,7 @@ public final class YoungAndroidProjectService extends CommonProjectService {
    * @param projectId  project id to be built
    * @param target  build target (optional, implementation dependent)
    */
-  public void updateCurrentProgress(User user, long projectId, String target) {
-    try {
-      String userId = user.getUserId();
-      String projectName = storageIo.getProjectName(userId, projectId);
-      String outputFileDir = BUILD_FOLDER + '/' + target;
-      URL buildServerUrl = null;
-      ProjectSourceZip zipFile = null;
-
-      buildServerUrl = new URL(getBuildServerUrlStr(user.getUserEmail(),
-        userId, projectId, outputFileDir));
-      HttpURLConnection connection = (HttpURLConnection) buildServerUrl.openConnection();
-      connection.setDoOutput(true);
-      connection.setRequestMethod("POST");
-
-      int responseCode = connection.getResponseCode();
-        if (responseCode == HttpURLConnection.HTTP_OK) {
-          try {
-            String content = readContent(connection.getInputStream());
-            if (content != null && !content.isEmpty()) {
-              if (DEBUG) {
-                LOG.info("The current progress is " + content + "%.");
-              }
-              currentProgress = Integer.parseInt(content);
-            }
-          } catch (IOException e) {
-            // No content. That's ok.
-          }
-         }
-      } catch (MalformedURLException e) {
-        // that's ok, nothing to do
-      } catch (IOException e) {
-        // that's ok, nothing to do
-      } catch (EncryptionException e) {
-        // that's ok, nothing to do
-      } catch (RuntimeException e) {
-        // that's ok, nothing to do
-      }
-  }
-
-  // Nicely format floating number using only two decimal places
-  private String format(double input) {
-    DecimalFormat formatter = new DecimalFormat("###.##");
-    return formatter.format(input);
+  public int getCurrentProgress(User user, long projectId, String target) {
+    return storageIo.getBuildStatus(user.getUserId(), projectId);
   }
 }

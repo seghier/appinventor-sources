@@ -123,6 +123,7 @@ public class DesignToolbar extends Toolbar {
   private static final String WIDGET_NAME_SWITCH_LANGUAGE_ENGLISH = "English";
   private static final String WIDGET_NAME_SWITCH_LANGUAGE_CHINESE_CN = "Simplified Chinese";
   private static final String WIDGET_NAME_SWITCH_LANGUAGE_SPANISH_ES = "Spanish-Spain";
+  private static final String WIDGET_NAME_SWITCH_LANGUAGE_PORTUGUESE = "Portuguese";
   //private static final String WIDGET_NAME_SWITCH_LANGUAGE_GERMAN = "German";
   //private static final String WIDGET_NAME_SWITCH_LANGUAGE_VIETNAMESE = "Vietnamese";
 
@@ -415,6 +416,7 @@ public class DesignToolbar extends Toolbar {
             screen.screenName, new SwitchScreenAction(projectId, screen.screenName)));
       }
       projectNameLabel.setText(projectName);
+      YaBlocksEditor.resendAssetsAndExtensions();  // Send assets for active project
     } else {
       ErrorReporter.reportError("Design toolbar doesn't know about project " + projectName +
           " with id " + projectId);
@@ -520,7 +522,7 @@ public class DesignToolbar extends Toolbar {
     setButtonEnabled(WIDGET_NAME_SWITCH_TO_FORM_EDITOR, blocks);
 
     if (AppInventorFeatures.allowMultiScreenApplications() && !isReadOnly) {
-      if (getCurrentProject() == null || getCurrentProject().currentScreen == "Screen1") {
+      if (getCurrentProject() == null || "Screen1".equals(getCurrentProject().currentScreen)) {
         setButtonEnabled(WIDGET_NAME_REMOVEFORM, false);
       } else {
         setButtonEnabled(WIDGET_NAME_REMOVEFORM, true);

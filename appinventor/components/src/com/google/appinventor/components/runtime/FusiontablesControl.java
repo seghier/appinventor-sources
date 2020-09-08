@@ -1,6 +1,6 @@
 // -*- mode: java; c-basic-offset: 2; -*-
 // Copyright 2009-2011 Google, All Rights reserved
-// Copyright 2011-2012 MIT, All rights reserved
+// Copyright 2011-2019 MIT, All rights reserved
 // Released under the Apache License, Version 2.0
 // http://www.apache.org/licenses/LICENSE-2.0
 package com.google.appinventor.components.runtime;
@@ -88,6 +88,8 @@ import java.util.ArrayList;
     description = "<p>A non-visible component that communicates with Google Fusion Tables. " +
     "Fusion Tables let you store, share, query and visualize data tables; " +
     "this component lets you query, create, and modify these tables.</p> "  +
+    "<p><font color=red><b>NOTE:</b>&nbsp;Google shutdown the Fusion Tables service on December 3, 2019. This " +
+    "component no longer functions.</font></p> " +
     "<p>This component uses the " +
     "<a href=\"https://developers.google.com/fusiontables/docs/v2/getting_started\" target=\"_blank\">Fusion Tables API V2.0</a>. " +
     "<p>Applications using Fusion Tables must authentication to Google's servers. There " +
@@ -121,7 +123,7 @@ import java.util.ArrayList;
     "<a href=\"https://developers.google.com/fusiontables/docs/v2/getting_started\" target=\"_blank\">the reference manual</a>, " +
     "which means that things like capitalization for names of columns matters, and " +
     "that single quotes must be used around column names if there are spaces in them.</p>",
-    category = ComponentCategory.STORAGE,
+    category = ComponentCategory.INTERNAL,
     nonVisible = true,
     iconName = "images/fusiontables.png")
 @SimpleObject
@@ -220,6 +222,10 @@ public class FusiontablesControl extends AndroidNonvisibleComponent implements C
   private String serviceAccountEmail = "";
 
   private String scope = "https://www.googleapis.com/auth/fusiontables";
+
+  private String loadingDialogMessage = "Please wait loading...";
+
+  private boolean showLoadingDialog = true;
 
   public FusiontablesControl(ComponentContainer componentContainer) {
     super(componentContainer.$form());
@@ -430,6 +436,48 @@ public class FusiontablesControl extends AndroidNonvisibleComponent implements C
   public void GetRowsWithConditions(String tableId, String columns, String conditions) {
     query = "SELECT " + columns + " FROM " + tableId + " WHERE " + conditions;
     new QueryProcessorV2(activity).execute(query);
+  }
+
+  /**
+   * Setter for the loading dialog's message.
+   */
+  @DesignerProperty(editorType = PropertyTypeConstants.PROPERTY_TYPE_STRING,
+      defaultValue = "Please wait loading...")
+  @SimpleProperty
+  public void LoadingDialogMessage(String loadingDialogMessage) {
+    this.loadingDialogMessage = loadingDialogMessage;
+  }
+
+  /**
+   * Getter for the loading dialog's message.
+   * @return loadingDialogMessage
+   */
+  @SimpleProperty(
+      description = "Set the loading message for the dialog.",
+      category = PropertyCategory.BEHAVIOR)
+  public String LoadingDialogMessage() {
+    return loadingDialogMessage;
+  }
+
+  /**
+   * Setter for the loading dialog's visibility.
+   */
+  @DesignerProperty(editorType = PropertyTypeConstants.PROPERTY_TYPE_BOOLEAN,
+      defaultValue = "True")
+  @SimpleProperty
+  public void ShowLoadingDialog(boolean showLoadingDialog) {
+    this.showLoadingDialog = showLoadingDialog;
+  }
+
+  /**
+   * Getter for the loading dialog's visibility.
+   * @return True if the loading dialog should be shown, otherwise False.
+   */
+  @SimpleProperty(
+      description = "Whether or not to show the loading dialog",
+      category = PropertyCategory.BEHAVIOR)
+  public boolean ShowLoadingDialog() {
+    return showLoadingDialog;
   }
 
 
@@ -784,8 +832,10 @@ public class FusiontablesControl extends AndroidNonvisibleComponent implements C
 
     @Override
     protected void onPreExecute() {
-      dialog.setMessage("Please wait loading...");
-      dialog.show();
+      if (ShowLoadingDialog()) {
+        dialog.setMessage(LoadingDialogMessage());
+        dialog.show();
+      }
     }
 
     /**

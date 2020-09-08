@@ -190,10 +190,10 @@ Blockly.Blocks['procedures_defnoreturn'] = {
     // [lyn, 10/28/13] I thought this rerendering was unnecessary. But I was wrong!
     // Without it, get bug noticed by Andrew in which toggling horizontal -> vertical params
     // in procedure decl doesn't handle body tag appropriately!
+    for (var i = 0; i < this.inputList.length; i++) {
+      this.inputList[i].init();
+    }
     if (this.rendered) {
-      for (var i = 0; i < this.inputList.length; i++) {
-        this.inputList[i].init();
-      }
       this.render();
     }
     if (this.workspace.loadCompleted) {  // set in BlocklyPanel.java on successful load
@@ -249,16 +249,8 @@ Blockly.Blocks['procedures_defnoreturn'] = {
       var newArguments = procDecl.arguments_;
       newArguments[paramIndex] = newParamName;
 
-      var procName = procDecl.getFieldValue('NAME');
-
       // 1. Change all callers so label reflects new name
       Blockly.Procedures.mutateCallers(procDecl);
-
-      var callers = Blockly.Procedures.getCallers(procName, procWorkspace);
-      for (var x = 0; x < callers.length; x++) {
-        var block = callers[x];
-        Blockly.Blocks.Utilities.renameCollapsed(block, 0);
-      }
 
       // 2. If there's an open mutator, change the name in the corresponding slot.
       if (procDecl.mutator && procDecl.mutator.rootBlock_) {
@@ -413,6 +405,9 @@ Blockly.Blocks['procedures_defnoreturn'] = {
   declaredNames: function() { // [lyn, 10/11/13] return the names of all parameters of this procedure
      return this.getVars();
   },
+  declaredVariables: function() {
+    return this.getVars();
+  },
   renameVar: function(oldName, newName) {
     this.renameVars(Blockly.Substitution.simpleSubstitution(oldName,newName));
   },
@@ -466,6 +461,7 @@ Blockly.Blocks['procedures_defnoreturn'] = {
       ' ' + Blockly.Msg.LANG_PROCEDURES_DEFNORETURN_DO }],
   customContextMenu: function (options) {
     Blockly.FieldParameterFlydown.addHorizontalVerticalOption(this, options);
+    Blockly.BlocklyEditor.addPngExportOption(this, options);
   },
   getParameters: function() {
     return this.arguments_;
@@ -506,6 +502,7 @@ Blockly.Blocks['procedures_defreturn'] = {
   getProcedureDef: Blockly.Blocks.procedures_defnoreturn.getProcedureDef,
   getVars: Blockly.Blocks.procedures_defnoreturn.getVars,
   declaredNames: Blockly.Blocks.procedures_defnoreturn.declaredNames,
+  declaredVariables: Blockly.Blocks.procedures_defnoreturn.declaredVariables,
   renameVar: Blockly.Blocks.procedures_defnoreturn.renameVar,
   renameVars: Blockly.Blocks.procedures_defnoreturn.renameVars,
   renameBound: Blockly.Blocks.procedures_defnoreturn.renameBound,
@@ -689,7 +686,6 @@ Blockly.Blocks['procedures_callnoreturn'] = {
   renameProcedure: function(oldName, newName) {
     if (Blockly.Names.equals(oldName, this.getFieldValue('PROCNAME'))) {
       this.setFieldValue(newName, 'PROCNAME');
-      Blockly.Blocks.Utilities.renameCollapsed(this, 0);
     }
   },
   // [lyn, 10/27/13] Renamed "fromChange" parameter to "startTracking", because it should be true in any situation
@@ -843,7 +839,11 @@ Blockly.Blocks['procedures_callnoreturn'] = {
     var workspace = this.workspace;
     option.callback = function() {
       var def = Blockly.Procedures.getDefinition(name, workspace);
-      def && def.select();
+      if (def) {
+        def.select();
+        workspace.centerOnBlock(def.id);
+        workspace.getParentSvg().parentElement.focus();
+      }
     };
     options.push(option);
   },

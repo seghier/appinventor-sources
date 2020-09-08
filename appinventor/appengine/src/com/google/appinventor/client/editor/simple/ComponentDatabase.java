@@ -134,6 +134,26 @@ class ComponentDatabase implements ComponentDatabaseInterface {
   }
 
   @Override
+  public String getComponentVersionName(String componentName) {
+    ComponentDefinition component = components.get(componentName);
+    if (component == null) {
+      throw new ComponentNotFoundException(componentName);
+    }
+
+    return component.getVersionName();
+  }
+
+  @Override
+  public String getComponentBuildDate(String componentName) {
+    ComponentDefinition component = components.get(componentName);
+    if (component == null) {
+      throw new ComponentNotFoundException(componentName);
+    }
+
+    return component.getDateBuilt();
+  }
+
+  @Override
   public String getComponentType(String componentName){
     ComponentDefinition component = components.get(componentName);
     if(component == null){
@@ -147,7 +167,7 @@ class ComponentDatabase implements ComponentDatabaseInterface {
   public String getComponentName(String componentType) {
     for (String componentName : components.keySet()) {
       ComponentDefinition component = components.get(componentName);
-      if (component.getType() == componentType) {
+      if (componentType.equals(component.getType())) {
         return componentName;
       }
     }
@@ -309,6 +329,8 @@ class ComponentDatabase implements ComponentDatabaseInterface {
     }
     ComponentDefinition component = new ComponentDefinition(name,
         Integer.parseInt(properties.get("version").asString().getString()),
+        optString(properties.get("versionName"), ""),
+        optString(properties.get("dateBuilt"), ""),
         properties.get("type").asString().getString(),
         Boolean.valueOf(properties.get("external").asString().getString()),
         properties.get("categoryString").asString().getString(),
@@ -325,15 +347,40 @@ class ComponentDatabase implements ComponentDatabaseInterface {
     return true;
   }
 
+  /**
+   * Extracts a string from the given value. If value is null, returns the defaultValue.
+   * @param value JSON value to process
+   * @param defaultValue Alternative value if {@code value} is not valid
+   * @return A non-null String containing either the String version of {@code value} or
+   * {@code defaultValue}
+   */
+  private String optString(JSONValue value, String defaultValue) {
+    if (value == null) {
+      return defaultValue;
+    }
+    return value.asString().getString();
+  }
+
   /*
    * Enters property information into the component descriptor.
    */
   private void findComponentProperties(ComponentDefinition component, JSONArray propertiesArray) {
     for (JSONValue propertyValue : propertiesArray.getElements()) {
       Map<String, JSONValue> properties = propertyValue.asObject().getProperties();
+
+      // TODO Since older versions of extensions do not have the "editorArgs" key,
+      // we check if "editorArgs" exists before parsing as a workaround. We may
+      // need better approaches in future versions.
+      List<String> editorArgsList = new ArrayList<String>();
+      if (properties.containsKey("editorArgs")) {
+        for (JSONValue val : properties.get("editorArgs").asArray().getElements())
+          editorArgsList.add(val.asString().getString());
+      }
+
       component.add(new PropertyDefinition(properties.get("name").asString().getString(),
-          properties.get("defaultValue").asString().getString(), properties.get("editorType")
-              .asString().getString()));
+          properties.get("defaultValue").asString().getString(),
+          properties.get("editorType").asString().getString(),
+          editorArgsList.toArray(new String[0])));
     }
   }
 
@@ -453,7 +500,7 @@ class ComponentDatabase implements ComponentDatabaseInterface {
 
   private void fireResetDatabase() {
     for (ComponentDatabaseChangeListener listener : copyComponentDatbaseChangeListeners()) {
-      listener.onResetDatabase();;
+      listener.onResetDatabase();
     }
   }
 
